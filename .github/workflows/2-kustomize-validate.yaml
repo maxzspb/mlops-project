@@ -1,0 +1,62 @@
+name: Validate Manifests & Deploy
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'k8s/**'
+      - '.github/workflows/2-kustomize-validate.yaml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Kustomize build
+        run: kustomize build k8s/overlays/${{ matrix.environment }} > manifests-${{ matrix.environment }}.yaml
+
+      # - name: Validate with kubectl dry-run
+      #   run: |
+      #     mkdir -p ~/.kube
+      #     echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+      #     kubectl apply -f manifests-${{ matrix.environment }}.yaml --dry-run=client
+
+      - name: Validate YAML syntax
+        run: |
+          python3 -c "
+          import yaml
+          with open('manifests-${{ matrix.environment }}.yaml', 'r') as f:
+              yaml.safe_load_all(f)
+          print('✓ YAML синтаксис валиден')
+          "
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: manifests-${{ matrix.environment }}
+          path: manifests-${{ matrix.environment }}.yaml
+
+  # argocd-sync:
+  #   runs-on: ubuntu-latest
+  #   needs: validate
+  #   if: github.ref == 'refs/heads/main'
+  #
+  #   steps:
+  #     - name: Trigger Argo CD sync
+  #       env:
+  #         ARGOCD_SERVER: localhost:8080
+  #         ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+  #       run: |
+  #         # В production это будет реальный endpoint
+  #         echo "Would trigger Argo CD sync"
+  #         echo "Application: mlops-app"
