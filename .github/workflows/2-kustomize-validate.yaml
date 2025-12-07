@@ -19,9 +19,10 @@ jobs:
 
       - name: Install Kustomize
         run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          VERSION=$(curl -s https://api.github.com/repos/kubernetes-sigs/kustomize/releases/latest | grep tag_name | cut -d '"' -f 4)
+          curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/${VERSION}/kustomize_${VERSION:1}_linux_amd64.tar.gz" | tar xz
           sudo mv kustomize /usr/local/bin/
-
+          
       - name: Kustomize build
         run: kustomize build k8s/overlays/${{ matrix.environment }} --enable-helm > manifests-${{ matrix.environment }}.yaml
 
@@ -54,9 +55,8 @@ jobs:
   #   steps:
   #     - name: Trigger Argo CD sync
   #       env:
-  #         ARGOCD_SERVER: localhost:8080
+  #         ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
   #         ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
   #       run: |
-  #         # В production это будет реальный endpoint
   #         echo "Would trigger Argo CD sync"
   #         echo "Application: mlops-app"
