@@ -24,14 +24,19 @@ jobs:
         service:
           - dockerfile: docker/pytorch_exp/Dockerfile
             image_name: pytorch_exp
+            context: docker/pytorch_exp
           - dockerfile: docker/mlflow/Dockerfile
             image_name: mlflow
+            context: docker/mlflow
           - dockerfile: docker/fastapi/Dockerfile
             image_name: fastapi
+            context: docker/fastapi
           - dockerfile: docker/evidently/Dockerfile
             image_name: evidently
+            context: docker/evidently
           - dockerfile: docker/ml_pipe_exp/Dockerfile
             image_name: ml_pipe_exp
+            context: docker/ml_pipe_exp
           # - dockerfile: docker/triton_server/Dockerfile
           #   image_name: triton_server
 
