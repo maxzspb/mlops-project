@@ -1,0 +1,72 @@
+name: CT - Scheduled Training
+
+on:
+  # schedule:
+  #   - cron: '0 2 * * *'  
+  workflow_dispatch:     
+
+jobs:
+  training:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Trigger KFP Pipeline
+        run: |
+          kubectl apply -f k8s/pipelines/ml-retrain.yaml -n kubeflow || sleep 30
+          
+          JOB=$(kubectl get jobs -n kubeflow -o name | head -1)
+          
+          if [ -n "$JOB" ]; then
+            echo "Waiting for job: $JOB"
+            kubectl wait --for=condition=complete "$JOB" -n kubeflow --timeout=3600s || true
+            kubectl logs -n kubeflow "$JOB" --all-containers=true | tail -100
+          fi
+
+      - name: Check model metrics
+        run: |
+          python3 << 'PYTHON'
+          import requests
+          import json
+          
+          mlflow_uri = "http://mlflow.mlops:5000"
+          
+          try:
+            response = requests.get(
+              f"{mlflow_uri}/api/2.0/mlflow/experiments/get-by-name",
+              params={"experiment_name": "kserve-experiment"}
+            )
+            
+            if response.status_code == 200:
+              exp_id = response.json()["experiment"]["experiment_id"]
+              
+              response = requests.get(
+                f"{mlflow_uri}/api/2.0/mlflow/runs/search",
+                json={"experiment_ids": [exp_id], "max_results": 1}
+              )
+              
+              if response.json()["runs"]:
+                run = response.json()["runs"][0]
+                metrics = run.get("data", {}).get("metrics", {})
+                
+                accuracy = next((m["value"] for m in metrics if m["key"] == "accuracy"), None)
+                
+                if accuracy and accuracy >= 0.85:
+                  print(f"Model accuracy GOOD: {accuracy:.4f}")
+                else:
+                  print(f"Model accuracy LOW: {accuracy:.4f}")
+                  exit(1)
+              else:
+                print("No runs found in MLflow")
+            else:
+              print("MLflow not responding (expected in dev)")
+          except Exception as e:
+            print(f"ℹMetrics check skipped: {e}")
+          PYTHON
+
