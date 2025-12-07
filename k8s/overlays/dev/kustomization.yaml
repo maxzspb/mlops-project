@@ -6,6 +6,7 @@ resources:
   - ../../base/kubeflow
   - ../../base/monitoring
   - ../../base/serving
+  - ../../base/operators
 
 commonLabels:
   env: dev

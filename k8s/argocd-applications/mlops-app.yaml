@@ -9,7 +9,9 @@ spec:
   source:
     repoURL: https://github.com/maxzspb/mlops-project
     targetRevision: main
-    path: k8s/overlays/prod
+    path: k8s/overlays/dev
+    kustomize:
+      enableHelm: true
 
   destination:
     server: https://kubernetes.default.svc
