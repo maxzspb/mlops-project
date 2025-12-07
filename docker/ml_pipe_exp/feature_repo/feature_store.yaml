@@ -1,0 +1,12 @@
+project: iris_project
+registry: s3://feast-data/registry.db
+provider: local
+
+online_store:
+  type: redis
+  connection_string: "localhost:6379"
+
+offline_store:
+  type: file
+
+s3_endpoint_url: localhost:9000

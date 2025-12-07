@@ -1,0 +1,75 @@
+name: 🐳 CI - Docker Build & Push
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'docker/**'
+      - '.github/workflows/1-docker-build.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docker/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  matrix-build:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        service:
+          - dockerfile: docker/pytorch_exp/Dockerfile
+            image_name: pytorch_exp
+          - dockerfile: docker/mlflow/Dockerfile
+            image_name: mlflow
+          - dockerfile: docker/fastapi/Dockerfile
+            image_name: fastapi
+          - dockerfile: docker/evidently/Dockerfile
+            image_name: evidently
+          - dockerfile: docker/ml_pipe_exp/Dockerfile
+            image_name: ml_pipe_exp
+          # - dockerfile: docker/triton_server/Dockerfile
+          #   image_name: triton_server
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service.image_name }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service.image_name }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service.image_name }}:buildcache,mode=max
+
+      - name: Image scan (optional)
+        run: |
+          echo "✅ Docker images built successfully"
+          echo "Available at: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
