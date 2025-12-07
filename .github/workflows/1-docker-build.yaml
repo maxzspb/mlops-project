@@ -19,6 +19,9 @@ jobs:
   matrix-build:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
+    permissions:
+      contents: read  
+      packages: write 
     strategy:
       matrix:
         service:
