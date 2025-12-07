@@ -41,7 +41,7 @@ jobs:
           "
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: manifests-${{ matrix.environment }}
           path: manifests-${{ matrix.environment }}.yaml
