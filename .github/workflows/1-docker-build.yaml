@@ -79,5 +79,5 @@ jobs:
 
       - name: Image scan (optional)
         run: |
-          echo "✅ Docker images built successfully"
+          echo "Docker images built successfully"
           echo "Available at: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"

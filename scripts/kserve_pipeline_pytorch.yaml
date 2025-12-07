@@ -1,0 +1,404 @@
+# PIPELINE DEFINITION
+# Name: kserve-mlops-pipeline-pytorch
+# Description: Feast -> PyTorchJob -> MLflow -> KServe
+components:
+  comp-etl-and-feast-op:
+    executorLabel: exec-etl-and-feast-op
+    inputDefinitions:
+      parameters:
+        access_key:
+          parameterType: STRING
+        minio_url:
+          parameterType: STRING
+        redis_url:
+          parameterType: STRING
+        secret_key:
+          parameterType: STRING
+  comp-kserve-deploy-op:
+    executorLabel: exec-kserve-deploy-op
+    inputDefinitions:
+      parameters:
+        model_name:
+          defaultValue: iris-classifier
+          isOptional: true
+          parameterType: STRING
+        model_uri:
+          parameterType: STRING
+        namespace:
+          defaultValue: kubeflow
+          isOptional: true
+          parameterType: STRING
+  comp-train-with-pytorchjob-op:
+    executorLabel: exec-train-with-pytorchjob-op
+    inputDefinitions:
+      parameters:
+        access_key:
+          parameterType: STRING
+        gpu_per_replica:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        minio_url:
+          parameterType: STRING
+        mlflow_url:
+          parameterType: STRING
+        namespace:
+          defaultValue: kubeflow
+          isOptional: true
+          parameterType: STRING
+        pytorch_image:
+          defaultValue: pytorch-kfp:v1
+          isOptional: true
+          parameterType: STRING
+        secret_key:
+          parameterType: STRING
+        timeout_seconds:
+          defaultValue: 3600.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        worker_replicas:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-etl-and-feast-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - etl_and_feast_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef etl_and_feast_op(\n    minio_url: str,\n    redis_url: str,\n\
+          \    access_key: str,\n    secret_key: str\n):\n    import os\n    import\
+          \ pandas as pd\n    import numpy as np\n    from sklearn.datasets import\
+          \ load_iris\n    import boto3\n    from io import BytesIO\n    from datetime\
+          \ import datetime\n\n    os.environ[\"AWS_ENDPOINT_URL\"] = minio_url\n\
+          \    os.environ[\"AWS_ACCESS_KEY_ID\"] = access_key\n    os.environ[\"AWS_SECRET_ACCESS_KEY\"\
+          ] = secret_key\n    os.environ[\"AWS_REGION\"] = \"us-east-1\"\n\n    print(\"\
+          --- [Step 1] Generating Data ---\")\n    iris = load_iris()\n    df = pd.DataFrame(iris.data,\
+          \ columns=['sepal_length', 'sepal_width', 'petal_length', 'petal_width'])\n\
+          \    df.columns = [c.replace(' ', '_') for c in df.columns]\n    df['target']\
+          \ = iris.target\n    df['flower_id'] = np.arange(len(df))\n    df['event_timestamp']\
+          \ = pd.Timestamp.now()\n\n    s3 = boto3.client('s3', endpoint_url=minio_url,\
+          \ aws_access_key_id=access_key, aws_secret_access_key=secret_key)\n    try:\n\
+          \        s3.create_bucket(Bucket=\"feast-data\")\n    except Exception:\n\
+          \        pass\n\n    out_buffer = BytesIO()\n    df.to_parquet(out_buffer,\
+          \ index=False)\n    s3.put_object(Bucket=\"feast-data\", Key=\"iris.parquet\"\
+          , Body=out_buffer.getvalue())\n    print(\"\u2705 Data saved to MinIO\"\
+          )\n\n    repo_path = \"/app/feature_repo\"\n    yaml_content = f\"\"\"\n\
+          project: iris_project\nregistry: s3://feast-data/registry.db\nprovider:\
+          \ local\nonline_store:\n    type: redis\n    connection_string: \"{redis_url}\"\
+          \noffline_store:\n    type: file\n\"\"\"\n    with open(f\"{repo_path}/feature_store.yaml\"\
+          , \"w\") as f:\n        f.write(yaml_content)\n\n    os.chdir(repo_path)\n\
+          \n    print(\"--- [Step 2] Syncing to Redis ---\")\n    if os.system(\"\
+          feast apply\") != 0: raise RuntimeError(\"Feast Apply Failed\")\n    if\
+          \ os.system(f\"feast materialize-incremental {datetime.now().isoformat()}\"\
+          ) != 0:\n        raise RuntimeError(\"Materialize Failed\")\n    print(\"\
+          \u2705 Feast synced successfully\")\n\n"
+        image: feast-trainer:v3
+    exec-kserve-deploy-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - kserve_deploy_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'kubernetes'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef kserve_deploy_op(\n    model_uri: str,\n    model_name: str =\
+          \ \"iris-classifier\",\n    namespace: str = \"kubeflow\"\n):\n    from\
+          \ kubernetes import client, config\n    import json\n\n    print(f\"\U0001F680\
+          \ Deploying {model_uri} to KServe...\")\n    try:\n        config.load_incluster_config()\n\
+          \    except Exception:\n        config.load_kube_config()\n    api = client.CustomObjectsApi()\n\
+          \n    isvc = {\n        \"apiVersion\": \"serving.kserve.io/v1beta1\",\n\
+          \        \"kind\": \"InferenceService\",\n        \"metadata\": {\n    \
+          \        \"name\": model_name,\n            \"namespace\": namespace,\n\
+          \            \"annotations\": {\"sidecar.istio.io/inject\": \"false\"}\n\
+          \        },\n        \"spec\": {\n            \"predictor\": {\n       \
+          \         \"serviceAccountName\": \"kserve-sa\",\n                \"model\"\
+          : {\n                    \"modelFormat\": {\"name\": \"pytorch\"}, # \u0438\
+          \u043B\u0438 \"sklearn\" / \"onnx\" \u2014 \u0443\u043A\u0430\u0436\u0438\
+          \ \u043F\u043E \u0444\u043E\u0440\u043C\u0430\u0442\u0443 \u043C\u043E\u0434\
+          \u0435\u043B\u0438\n                    \"storageUri\": model_uri\n    \
+          \            }\n            }\n        }\n    }\n\n    try:\n        api.create_namespaced_custom_object(group=\"\
+          serving.kserve.io\", version=\"v1beta1\", namespace=namespace, plural=\"\
+          inferenceservices\", body=isvc)\n        print(\"\u2705 InferenceService\
+          \ created!\")\n    except client.exceptions.ApiException as e:\n       \
+          \ if e.status == 409:\n            print(\"\U0001F504 InferenceService exists,\
+          \ patching...\")\n            existing = api.get_namespaced_custom_object(group=\"\
+          serving.kserve.io\", version=\"v1beta1\", namespace=namespace, plural=\"\
+          inferenceservices\", name=model_name)\n            isvc[\"metadata\"][\"\
+          resourceVersion\"] = existing[\"metadata\"][\"resourceVersion\"]\n     \
+          \       api.replace_namespaced_custom_object(group=\"serving.kserve.io\"\
+          , version=\"v1beta1\", namespace=namespace, plural=\"inferenceservices\"\
+          , name=model_name, body=isvc)\n            print(\"\u2705 InferenceService\
+          \ updated!\")\n        else:\n            raise\n\n"
+        image: python:3.9
+    exec-train-with-pytorchjob-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_with_pytorchjob_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'kubernetes'\
+          \ 'mlflow' 'requests' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_with_pytorchjob_op(\n    minio_url: str,\n    mlflow_url:\
+          \ str,\n    access_key: str,\n    secret_key: str,\n    pytorch_image: str\
+          \ = \"pytorch-kfp:v1\",\n    namespace: str = \"kubeflow\",\n    worker_replicas:\
+          \ int = 1,\n    gpu_per_replica: int = 1,\n    timeout_seconds: int = 3600\n\
+          ) -> str:\n    \"\"\"\n    \u0421\u043E\u0437\u0434\u0430\u0451\u0442 PyTorchJob\
+          \ CRD (kubeflow.org/v1 pytorchjobs), \u0436\u0434\u0451\u0442 \u0437\u0430\
+          \u0432\u0435\u0440\u0448\u0435\u043D\u0438\u044F,\n    \u0437\u0430\u0442\
+          \u0435\u043C \u043D\u0430\u0445\u043E\u0434\u0438\u0442 \u043F\u043E\u0441\
+          \u043B\u0435\u0434\u043D\u0438\u0439 run \u0432 MLflow (\u044D\u043A\u0441\
+          \u043F\u0435\u0440\u0438\u043C\u0435\u043D\u0442 'kserve-experiment') \u0438\
+          \ \u0432\u043E\u0437\u0432\u0440\u0430\u0449\u0430\u0435\u0442 model_uri.\n\
+          \    \u041F\u0440\u0435\u0434\u043F\u043E\u043B\u0430\u0433\u0430\u0435\u0442\
+          \u0441\u044F, \u0447\u0442\u043E \u0432\u043D\u0443\u0442\u0440\u0438 \u043E\
+          \u0431\u0440\u0430\u0437\u0430 pytorch_image \u0435\u0441\u0442\u044C \u0441\
+          \u043A\u0440\u0438\u043F\u0442 train.py, \u043A\u043E\u0442\u043E\u0440\u044B\
+          \u0439 \u043B\u043E\u0433\u0438\u0440\u0443\u0435\u0442 \u043C\u043E\u0434\
+          \u0435\u043B\u044C \u0432 MLflow.\n    \"\"\"\n    import time\n    import\
+          \ uuid\n    import os\n    from kubernetes import client, config\n    import\
+          \ mlflow\n    from mlflow.tracking import MlflowClient\n\n    # env \u0434\
+          \u043B\u044F \u0434\u043E\u0441\u0442\u0443\u043F\u0430 \u043A MinIO/MLflow\
+          \ \u0432 training \u043A\u043E\u043D\u0442\u0435\u0439\u043D\u0435\u0440\
+          \u0430\u0445\n    env_vars_for_train = [\n        {\"name\": \"AWS_ENDPOINT_URL\"\
+          , \"value\": minio_url},\n        {\"name\": \"AWS_ACCESS_KEY_ID\", \"value\"\
+          : access_key},\n        {\"name\": \"AWS_SECRET_ACCESS_KEY\", \"value\"\
+          : secret_key},\n        {\"name\": \"MLFLOW_S3_ENDPOINT_URL\", \"value\"\
+          : minio_url},\n        {\"name\": \"MLFLOW_TRACKING_URI\", \"value\": mlflow_url},\n\
+          \    ]\n\n    # \u0418\u043C\u044F job\n    job_name = f\"pytorch-train-{str(uuid.uuid4())[:8]}\"\
+          \n\n    # PyTorchJob body (\u043F\u0440\u0438\u043C\u0435\u0440\u043D\u044B\
+          \u0439, \u0430\u0434\u0430\u043F\u0442\u0438\u0440\u0443\u0439 \u043F\u043E\
+          \u0434 \u0442\u0432\u043E\u0439 \u043E\u0431\u0440\u0430\u0437 / \u043A\u043E\
+          \u043C\u0430\u043D\u0434\u0443)\n    pytorchjob = {\n        \"apiVersion\"\
+          : \"kubeflow.org/v1\",\n        \"kind\": \"PyTorchJob\",\n        \"metadata\"\
+          : {\"name\": job_name, \"namespace\": namespace},\n        \"spec\": {\n\
+          \            \"pytorchReplicaSpecs\": {\n                \"Master\": {\n\
+          \                    \"replicas\": 1,\n                    \"restartPolicy\"\
+          : \"OnFailure\",\n                    \"template\": {\n                \
+          \        \"spec\": {\n                            \"containers\": [\n  \
+          \                              {\n                                    \"\
+          name\": \"pytorch\",\n                                    \"image\": pytorch_image,\n\
+          \                                    # \u043F\u0440\u0435\u0434\u043F\u043E\
+          \u043B\u0430\u0433\u0430\u0435\u043C, \u0447\u0442\u043E \u0432 \u043E\u0431\
+          \u0440\u0430\u0437\u0435 \u0435\u0441\u0442\u044C /app/train.py\n      \
+          \                              \"command\": [\"python\", \"/app/train.py\"\
+          ],\n                                    \"env\": env_vars_for_train,\n \
+          \                                   \"resources\": {\n                 \
+          \                       \"limits\": {\"cpu\": \"2\", \"memory\": \"4Gi\"\
+          , \"nvidia.com/gpu\": str(gpu_per_replica)},\n                         \
+          \               \"requests\": {\"cpu\": \"1\", \"memory\": \"2Gi\", \"nvidia.com/gpu\"\
+          : str(gpu_per_replica)}\n                                    }\n       \
+          \                         }\n                            ]\n           \
+          \             }\n                    }\n                },\n           \
+          \     \"Worker\": {\n                    \"replicas\": worker_replicas,\n\
+          \                    \"restartPolicy\": \"OnFailure\",\n               \
+          \     \"template\": {\n                        \"spec\": {\n           \
+          \                 \"containers\": [\n                                {\n\
+          \                                    \"name\": \"pytorch\",\n          \
+          \                          \"image\": pytorch_image,\n                 \
+          \                   \"command\": [\"python\", \"/app/train.py\", \"--worker\"\
+          ],\n                                    \"env\": env_vars_for_train,\n \
+          \                                   \"resources\": {\n                 \
+          \                       \"limits\": {\"cpu\": \"2\", \"memory\": \"4Gi\"\
+          , \"nvidia.com/gpu\": str(gpu_per_replica)},\n                         \
+          \               \"requests\": {\"cpu\": \"1\", \"memory\": \"2Gi\", \"nvidia.com/gpu\"\
+          : str(gpu_per_replica)}\n                                    }\n       \
+          \                         }\n                            ]\n           \
+          \             }\n                    }\n                }\n            }\n\
+          \        }\n    }\n\n    # \u0421\u043E\u0437\u0434\u0430\u0451\u043C CRD\
+          \ \u043E\u0431\u044A\u0435\u043A\u0442\n    print(f\"\u25B6 Creating PyTorchJob\
+          \ {job_name} in namespace {namespace} ...\")\n    try:\n        config.load_incluster_config()\n\
+          \    except Exception:\n        # \u0434\u043B\u044F \u043B\u043E\u043A\u0430\
+          \u043B\u044C\u043D\u043E\u0433\u043E \u0442\u0435\u0441\u0442\u0430 (kubectl\
+          \ proxy / kubeconfig)\n        config.load_kube_config()\n\n    api = client.CustomObjectsApi()\n\
+          \    group = \"kubeflow.org\"\n    version = \"v1\"\n    plural = \"pytorchjobs\"\
+          \n\n    api.create_namespaced_custom_object(group=group, version=version,\
+          \ namespace=namespace, plural=plural, body=pytorchjob)\n    print(\"\u2705\
+          \ PyTorchJob created, waiting for completion...\")\n\n    # wait loop\n\
+          \    start = time.time()\n    while True:\n        obj = api.get_namespaced_custom_object(group=group,\
+          \ version=version, namespace=namespace, plural=plural, name=job_name)\n\
+          \        status = obj.get(\"status\", {}) or {}\n        conditions = status.get(\"\
+          conditions\", []) or []\n\n        # Debug print:\n        print(\"status.conditions:\"\
+          , conditions)\n\n        # check for succeeded\n        succeeded = any((c.get(\"\
+          type\") == \"Succeeded\" and c.get(\"status\") == \"True\") for c in conditions)\n\
+          \        failed = any((c.get(\"type\") == \"Failed\" and c.get(\"status\"\
+          ) == \"True\") for c in conditions)\n\n        if succeeded:\n         \
+          \   print(\"\u2705 PyTorchJob succeeded.\")\n            break\n       \
+          \ if failed:\n            raise RuntimeError(f\"PyTorchJob {job_name} failed.\
+          \ status: {status}\")\n\n        if time.time() - start > timeout_seconds:\n\
+          \            raise TimeoutError(f\"Timeout waiting for PyTorchJob {job_name}\
+          \ to finish (waited {timeout_seconds}s)\")\n\n        time.sleep(10)\n\n\
+          \    # \u041F\u043E\u0441\u043B\u0435 \u0443\u0441\u043F\u0435\u0448\u043D\
+          \u043E\u0433\u043E \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0438\
+          \u044F \u2014 \u043F\u043E\u043B\u0443\u0447\u0430\u0435\u043C \u043F\u043E\
+          \u0441\u043B\u0435\u0434\u043D\u0438\u0439 run \u043C\u043E\u0434\u0435\u043B\
+          \u0438 \u0432 MLflow\n    print(\"\u25B6 Querying MLflow for latest run\
+          \ in experiment 'kserve-experiment' ...\")\n    mlflow.set_tracking_uri(mlflow_url)\n\
+          \    client_ml = MlflowClient(tracking_uri=mlflow_url)\n\n    exp = client_ml.get_experiment_by_name(\"\
+          kserve-experiment\")\n    if exp is None:\n        raise RuntimeError(\"\
+          Experiment 'kserve-experiment' not found in MLflow. \u0423\u0431\u0435\u0434\
+          \u0438\u0441\u044C, \u0447\u0442\u043E train.py \u043B\u043E\u0433\u0438\
+          \u0440\u0443\u0435\u0442 \u0442\u0443\u0434\u0430.\")\n\n    exp_id = exp.experiment_id\n\
+          \    runs = client_ml.search_runs([exp_id], order_by=[\"attribute.start_time\
+          \ DESC\"], max_results=1)\n    if not runs:\n        raise RuntimeError(\"\
+          MLflow: no runs found in experiment 'kserve-experiment' after training.\"\
+          )\n\n    latest_run = runs[0]\n    artifact_uri = latest_run.info.artifact_uri\
+          \  # \u043E\u0431\u044B\u0447\u043D\u043E s3://mlflow/0/<run-id>\n    model_uri\
+          \ = artifact_uri.rstrip(\"/\") + \"/model\"  # \u043F\u0440\u0435\u0434\u043F\
+          \u043E\u043B\u0430\u0433\u0430\u0435\u043C, \u0447\u0442\u043E train.py\
+          \ \u043B\u043E\u0433\u0438\u0440\u0443\u0435\u0442 \u0430\u0440\u0442\u0435\
+          \u0444\u0430\u043A\u0442 \u0432 path \"model\"\n\n    print(f\"\u2705 Found\
+          \ model at: {model_uri}\")\n    return model_uri\n\n"
+        image: python:3.9
+pipelineInfo:
+  description: Feast -> PyTorchJob -> MLflow -> KServe
+  name: kserve-mlops-pipeline-pytorch
+root:
+  dag:
+    tasks:
+      etl-and-feast-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-etl-and-feast-op
+        inputs:
+          parameters:
+            access_key:
+              runtimeValue:
+                constant: minio
+            minio_url:
+              runtimeValue:
+                constant: http://minio-service.kubeflow.svc.cluster.local:9000
+            redis_url:
+              runtimeValue:
+                constant: redis-master.kubeflow.svc.cluster.local:6379
+            secret_key:
+              runtimeValue:
+                constant: minio123
+        taskInfo:
+          name: etl-and-feast-op
+      kserve-deploy-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-kserve-deploy-op
+        dependentTasks:
+        - train-with-pytorchjob-op
+        inputs:
+          parameters:
+            model_name:
+              runtimeValue:
+                constant: iris-model
+            model_uri:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: train-with-pytorchjob-op
+            namespace:
+              runtimeValue:
+                constant: kubeflow
+        taskInfo:
+          name: kserve-deploy-op
+      train-with-pytorchjob-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-with-pytorchjob-op
+        dependentTasks:
+        - etl-and-feast-op
+        inputs:
+          parameters:
+            access_key:
+              runtimeValue:
+                constant: minio
+            gpu_per_replica:
+              runtimeValue:
+                constant: 1.0
+            minio_url:
+              runtimeValue:
+                constant: http://minio-service.kubeflow.svc.cluster.local:9000
+            mlflow_url:
+              runtimeValue:
+                constant: http://mlflow.kubeflow.svc.cluster.local:5000
+            namespace:
+              runtimeValue:
+                constant: kubeflow
+            pytorch_image:
+              runtimeValue:
+                constant: pytorch-kfp:v1
+            secret_key:
+              runtimeValue:
+                constant: minio123
+            timeout_seconds:
+              runtimeValue:
+                constant: 3600.0
+            worker_replicas:
+              runtimeValue:
+                constant: 1.0
+        taskInfo:
+          name: train-with-pytorchjob-op
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.5.0

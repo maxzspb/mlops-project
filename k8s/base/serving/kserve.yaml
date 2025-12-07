@@ -1,0 +1,17 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: iris-model
+  namespace: kubeflow
+  annotations:
+    sidecar.istio.io/inject: "false"
+    serving.knative.dev/progressDeadline: "600s"
+spec:
+  predictor:
+    serviceAccountName: kserve-sa
+    timeout: 600
+    model:
+      modelFormat:
+        name: mlflow
+      protocolVersion: v2
+      storageUri: s3://mlflow/1/models/m-f2058400abda4e99b6ffd46b524acef1/artifacts

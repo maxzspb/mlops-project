@@ -1,0 +1,90 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evidently-service
+  namespace: mlops
+  labels:
+    app: evidently-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: evidently-service
+  template:
+    metadata:
+      labels:
+        app: evidently-service
+        monitoring: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: service
+        image: evidently:base
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5000
+          name: web
+        command: ["python"]
+        args: ["/app/app.py"]
+        volumeMounts:
+        - name: reports
+          mountPath: /var/evidently/reports
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 15
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+      volumes:
+      - name: reports
+        persistentVolumeClaim:
+          claimName: evidently-reports
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: evidently-reports
+  namespace: mlops
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: evidently-service
+  namespace: mlops
+  labels:
+    app: evidently-service
+spec:
+  type: ClusterIP
+  selector:
+    app: evidently-service
+  ports:
+  - port: 5000
+    targetPort: 5000
+    name: web

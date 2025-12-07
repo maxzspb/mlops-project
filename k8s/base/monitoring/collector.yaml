@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-conf
+  namespace: seldon-mesh
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+    processors:
+      batch:
+    exporters:
+      # Exporter "logging" просто пишет в stdout (или можно debug)
+      # Это корректно завершает транзакцию gRPC
+      debug:
+        verbosity: normal
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: collector
+  namespace: seldon-mesh
+  labels:
+    app: collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: collector
+  template:
+    metadata:
+      labels:
+        app: collector
+    spec:
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector:0.88.0
+        command: ["/otelcol"]
+        args: ["--config=/conf/config.yaml"]
+        ports:
+        - containerPort: 4317
+        volumeMounts:
+        - name: otel-collector-config-vol
+          mountPath: /conf
+      volumes:
+      - name: otel-collector-config-vol
+        configMap:
+          name: otel-collector-conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seldon-collector
+  namespace: seldon-mesh
+spec:
+  type: ClusterIP
+  selector:
+    app: collector
+  ports:
+    - port: 4317
+      protocol: TCP
+      targetPort: 4317

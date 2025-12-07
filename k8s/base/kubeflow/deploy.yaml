@@ -1,0 +1,195 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-pipeline-ui
+  namespace: kubeflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-pipeline-ui
+  template:
+    metadata:
+      labels:
+        app: ml-pipeline-ui
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      serviceAccountName: ml-pipeline-ui
+      containers:
+      - name: ml-pipeline-ui
+        image: ghcr.io/kubeflow/kfp-frontend:2.5.0
+        ports: [{containerPort: 3000}]
+        env:
+        - name: ML_PIPELINE_SERVICE_HOST
+          value: ml-pipeline
+        - name: ML_PIPELINE_SERVICE_PORT
+          value: "8888"
+        - name: VIEWER_TENSORBOARD_POD_TEMPLATE_SPEC_PATH
+          value: /etc/config/viewer-pod-template.json
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-pipeline
+  namespace: kubeflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-pipeline
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+        sidecar.istio.io/inject: "false"
+      labels:
+        app: ml-pipeline
+        app.kubernetes.io/component: ml-pipeline
+        app.kubernetes.io/name: kubeflow-pipelines
+    spec:
+      serviceAccountName: ml-pipeline
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 2000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: ml-pipeline-api-server
+        image: ghcr.io/kubeflow/kfp-api-server:2.5.0
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        command:
+          - /bin/apiserver
+          - --config=/etc/config/
+          - --sampleconfig=/etc/config/sample_config.json
+          - -alsologtostderr=true
+        
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/config
+        
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: PUBLISH_LOGS
+          value: "true"
+        - name: LOG_LEVEL
+          value: info
+        - name: AUTO_UPDATE_PIPELINE_DEFAULT_VERSION
+          value: "true"
+        - name: V2_DRIVER_IMAGE
+          value: ghcr.io/kubeflow/kfp-driver:2.5.0
+        - name: V2_LAUNCHER_IMAGE
+          value: ghcr.io/kubeflow/kfp-launcher:2.5.0
+        - name: METADATA_GRPC_SERVICE_HOST
+          value: "metadata-grpc-service"
+        - name: METADATA_GRPC_SERVICE_PORT
+          value: "8080"
+        
+        resources:
+          requests:
+            cpu: 250m
+            memory: 500Mi
+      volumes:
+      - name: config-volume
+        configMap:
+          name: ml-pipeline-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metadata-grpc-deployment
+  namespace: kubeflow
+  labels:
+    app: metadata-grpc-deployment
+    component: ml-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metadata-grpc-deployment
+  template:
+    metadata:
+      labels:
+        app: metadata-grpc-deployment
+        component: ml-pipeline
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+      - name: grpc
+        image: gcr.io/tfx-oss-public/ml_metadata_store_server:1.14.0
+        command:
+          - /bin/metadata_store_server
+        args:
+          - --mysql_config_database=metadb
+          - --mysql_config_host=mysql
+          - --mysql_config_port=3306
+          - --mysql_config_user=root
+          - --mysql_config_password=
+          - --enable_database_upgrade=true
+        ports:
+        - containerPort: 8080
+        livenessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        readinessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+          limits:
+            cpu: 500m
+            memory: 500Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metadata-grpc-service
+  namespace: kubeflow
+  labels:
+    app: metadata-grpc-service
+    component: ml-pipeline
+spec:
+  ports:
+  - name: grpc
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: metadata-grpc-deployment
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-pipeline
+  namespace: kubeflow
+  labels:
+    app: ml-pipeline
+spec:
+  ports:
+  - name: http
+    port: 8888
+    protocol: TCP
+    targetPort: 8888
+  - name: grpc
+    port: 8887
+    protocol: TCP
+    targetPort: 8887
+  selector:
+    app: ml-pipeline
+ 

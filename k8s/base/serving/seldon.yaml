@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: seldon-init-container-secret
+  namespace: mlops
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: minioadmin
+  AWS_SECRET_ACCESS_KEY: minioadmin
+  AWS_ENDPOINT_URL: http://minio.mlops.svc.cluster.local:9000  
+  USE_SSL: "false"
+---
+apiVersion: mlops.seldon.io/v1alpha1
+kind: Model
+metadata:
+  name: iris-model-v5
+  namespace: seldon-mesh
+spec:
+  storageUri: "s3://mlflow/0/models/m-d027eea6095c4128a45ffb275aff4f3d/artifacts"
+  secretName: seldon-rclone-secret
+  requirements:
+    - mlflow 
+
+---
+apiVersion: mlops.seldon.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: iris-pipeline-new
+  namespace: seldon-mesh
+spec:
+  steps:
+    - name: iris-model-v5
+      inputs:
+        - iris-pipeline-new.inputs
+  output:
+    steps:
+      - iris-model-v5
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: seldon-rclone-secret
+  namespace: seldon-mesh
+type: Opaque
+stringData:
+  s3: |
+    {
+      "name": "s3",
+      "type": "s3",
+      "parameters": {
+        "provider": "Minio",
+        "env_auth": "false",
+        "access_key_id": "minioadmin",
+        "secret_access_key": "minioadmin",
+        "endpoint": "http://minio.mlops.svc.cluster.local:9000",
+        "no_check_bucket": "true"
+      }
+    }
+---
+apiVersion: mlops.seldon.io/v1alpha1
+kind: Server
+metadata:
+  name: mlserver
+  namespace: seldon-mesh
+spec:
+  serverConfig: "mlserver"
+  replicas: 1
+  podSpec:
+    containers:
+      - name: mlserver
+        env:
+          - name: OTEL_TRACES_EXPORTER
+            value: "none"
+          - name: OTEL_METRICS_EXPORTER
+            value: "none"
+      
+      - name: agent
+        env:
+          - name: OTEL_TRACES_EXPORTER
+            value: "none"
+          - name: OTEL_METRICS_EXPORTER
+            value: "none"
+      - name: rclone
+        env:
+          - name: OTEL_TRACES_EXPORTER
+            value: "none"
+          - name: OTEL_METRICS_EXPORTER
+            value: "none"

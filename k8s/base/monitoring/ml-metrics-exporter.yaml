@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-metrics-exporter
+  namespace: mlops
+  labels:
+    app: ml-metrics-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-metrics-exporter
+  template:
+    metadata:
+      labels:
+        app: ml-metrics-exporter
+        monitoring: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: exporter
+          image: python:3.11-slim
+          ports:
+            - containerPort: 8000
+              name: metrics
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              pip install -q prometheus-client && \
+              python /app/exporter.py
+          volumeMounts:
+            - name: exporter-code
+              mountPath: /app
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: exporter-code
+          configMap:
+            name: ml-metrics-exporter-code
+
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ml-metrics-exporter-code
+  namespace: mlops
+data:
+  exporter.py: |
+    from prometheus_client import Counter, Gauge, Histogram, start_http_server
+    import random
+    import time
+
+    # Model metrics
+    predictions_total = Counter('ml_predictions_total', 'Total predictions', ['model', 'status'])
+    prediction_latency = Histogram(
+        'ml_prediction_latency_seconds',
+        'Prediction latency',
+        ['model'],
+        buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.0),
+    )
+    model_accuracy = Gauge('ml_model_accuracy', 'Model accuracy', ['model', 'stage'])
+    prediction_errors = Counter('ml_prediction_errors_total', 'Prediction errors', ['model', 'error_type'])
+
+    # Data quality metrics
+    data_drift_score = Gauge('ml_data_drift_score', 'Data drift score [0-1]', ['feature', 'model'])
+    feature_missing = Gauge('ml_feature_missing_values', 'Missing values ratio', ['feature', 'dataset'])
+
+    # Training metrics
+    training_duration = Histogram(
+        'ml_training_duration_seconds',
+        'Training duration',
+        ['model'],
+        buckets=(60, 300, 600, 1800, 3600),
+    )
+    training_loss = Gauge('ml_training_loss', 'Training loss', ['model', 'epoch'])
+
+    def main():
+        start_http_server(8000)
+        print("ML Metrics exporter started on :8000/metrics")
+        while True:
+            latency = random.uniform(0.05, 0.5)
+            predictions_total.labels(model='iris-model', status='success').inc()
+            prediction_latency.labels(model='iris-model').observe(latency)
+            model_accuracy.labels(model='iris-model', stage='production').set(
+                random.uniform(0.85, 0.95)
+            )
+
+            drift = random.uniform(0.1, 0.3)
+            data_drift_score.labels(feature='sepal_length', model='iris').set(drift)
+            data_drift_score.labels(feature='petal_length', model='iris').set(
+                random.uniform(0.1, 0.4)
+            )
+
+            time.sleep(10)
+
+    if __name__ == "__main__":
+        main()

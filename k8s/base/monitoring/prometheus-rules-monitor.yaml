@@ -1,0 +1,101 @@
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mlops-monitoring
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      monitoring: "true"
+  endpoints:
+  - port: metrics
+    interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mlops-metrics
+  namespace: mlops
+spec:
+  selector:
+    matchLabels:
+      app: mlops-inference
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlops-inference-metrics
+  namespace: mlops
+  labels:
+    app: mlops-inference
+spec:
+  selector:
+    app: mlops-inference
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: 8000
+---
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mlops-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: mlops.rules
+      interval: 30s
+      rules:
+        # Inference latency alerts
+        - alert: HighInferenceLatency
+          expr: histogram_quantile(0.95, rate(ml_prediction_latency_seconds_bucket[5m])) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High inference latency: {{ $value }}s"
+            description: "Model inference p95 latency is {{ $value }}s on {{ $labels.model }}"
+
+        # Model accuracy drop
+        - alert: ModelAccuracyDrop
+          expr: |
+            (ml_model_accuracy{stage="production"} - ml_model_accuracy{stage="baseline"}) / ml_model_accuracy{stage="baseline"} < -0.05
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Model accuracy dropped by >5%"
+
+        # Prediction error rate
+        - alert: HighPredictionErrorRate
+          expr: |
+            rate(ml_prediction_errors_total[5m]) / rate(ml_predictions_total[5m]) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Prediction error rate > 5%: {{ $value }}"
+
+        # Node resources
+        - alert: HighCPUUsage
+          expr: (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) by (instance)) > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU usage on {{ $labels.instance }}"
+
+        - alert: HighMemoryUsage
+          expr: |
+            (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage: {{ $value | humanizePercentage }}"
