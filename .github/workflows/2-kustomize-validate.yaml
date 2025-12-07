@@ -23,12 +23,6 @@ jobs:
       - name: Kustomize build
         run: kustomize build k8s/overlays/${{ matrix.environment }} --enable-helm > manifests-${{ matrix.environment }}.yaml
 
-      # - name: Validate with kubectl dry-run
-      #   run: |
-      #     mkdir -p ~/.kube
-      #     echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
-      #     kubectl apply -f manifests-${{ matrix.environment }}.yaml --dry-run=client
-
       - name: Validate YAML syntax
         run: |
           python3 -c "
@@ -44,16 +38,45 @@ jobs:
           name: manifests-${{ matrix.environment }}
           path: manifests-${{ matrix.environment }}.yaml
 
-  # argocd-sync:
-  #   runs-on: ubuntu-latest
-  #   needs: validate
-  #   if: github.ref == 'refs/heads/main'
-  #
-  #   steps:
-  #     - name: Trigger Argo CD sync
-  #       env:
-  #         ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
-  #         ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
-  #       run: |
-  #         echo "Would trigger Argo CD sync"
-  #         echo "Application: mlops-app"
+  validate-cluster:
+    runs-on: ubuntu-latest
+    needs: validate
+    if: |
+      github.ref == 'refs/heads/main' &&
+      secrets.KUBE_CONFIG != '' &&
+      secrets.ARGOCD_SERVER != '' &&
+      secrets.ARGOCD_TOKEN != ''
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: manifests-dev
+
+      - name: Validate with kubectl dry-run
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          kubectl apply -f manifests-dev.yaml --dry-run=client
+
+  argocd-sync:
+    runs-on: ubuntu-latest
+    needs: validate-cluster
+    if: |
+      github.ref == 'refs/heads/main' &&
+      secrets.KUBE_CONFIG != '' &&
+      secrets.ARGOCD_SERVER != '' &&
+      secrets.ARGOCD_TOKEN != ''
+
+    steps:
+      - name: Trigger Argo CD sync
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+        run: |
+          argocd app sync mlops-app \
+            --server $ARGOCD_SERVER \
+            --auth-token $ARGOCD_TOKEN \
+            --grpc-web
