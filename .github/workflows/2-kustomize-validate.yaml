@@ -23,7 +23,7 @@ jobs:
           sudo mv kustomize /usr/local/bin/
 
       - name: Kustomize build
-        run: kustomize build k8s/overlays/${{ matrix.environment }} > manifests-${{ matrix.environment }}.yaml
+        run: kustomize build k8s/overlays/${{ matrix.environment }} --enable-helm > manifests-${{ matrix.environment }}.yaml
 
       # - name: Validate with kubectl dry-run
       #   run: |
