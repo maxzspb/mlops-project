@@ -1,4 +1,4 @@
-name: 🐳 CI - Docker Build & Push
+name: CI - Docker Build & Push
 
 on:
   push:
