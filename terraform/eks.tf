@@ -50,11 +50,11 @@ resource "aws_eks_node_group" "general" {
   subnet_ids      = aws_subnet.private[*].id
   ami_type        = "AL2023_x86_64_STANDARD"
 
-  # scaling_config {
-  #   desired_size = 3
-  #   max_size     = 6
-  #   min_size     = 3
-  # }
+  scaling_config {
+    desired_size = 1
+    max_size     = 3
+    min_size     = 1
+  }
   
   instance_types = ["t3.micro"]
   capacity_type  = "SPOT"
